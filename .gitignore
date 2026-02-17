@@ -205,3 +205,27 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Internal (codegen, dev tooling, test UI)
+dev/
+tests/
+
+# Logs
+logs/
+
+# API key files
+*.json
+!.vscode/*.json
+
+# macOS
+.DS_Store
+
+# Runtime artifacts
+.pid
+.mcp-pid
+
+# Dev folder
+dev/
+
+# uv lock file
+uv.lock
