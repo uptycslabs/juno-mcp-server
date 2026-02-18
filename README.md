@@ -35,13 +35,10 @@ sequenceDiagram
     participant Server as juno-mcp-server
     participant Juno as Uptycs Juno API
 
-    rect rgb(40, 40, 60)
     Note over Client,Server: Connection setup
     Client->>Server: initialize
     Server-->>Client: available tools
-    end
 
-    rect rgb(40, 60, 40)
     Note over Client,Juno: Investigation
     Client->>Server: create_investigation("privilege escalation attempts")
     activate Server
@@ -61,9 +58,7 @@ sequenceDiagram
     end
     Server-->>Client: completed run with findings
     deactivate Server
-    end
 
-    rect rgb(60, 40, 40)
     Note over Client,Juno: Follow-up
     Client->>Server: create_follow_up("What accounts were involved?")
     activate Server
@@ -73,7 +68,6 @@ sequenceDiagram
     deactivate Juno
     Server-->>Client: follow-up run created
     deactivate Server
-    end
 ```
 
 ## What you can do
@@ -81,13 +75,12 @@ sequenceDiagram
 - **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
 - **Analyze findings** — "Show me the findings and recommendations from that investigation"
 - **Follow up** — "What user accounts were involved in the lateral movement?"
-- **Translate to SQL** — "Show all S3 buckets without encryption" → Trino SQL
 - **Manage investigations** — List, create, delete, and organize investigations into projects
 - **Share with your team** — Publish investigation runs for team visibility
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - An Uptycs account with Juno enabled
 - An Uptycs API key ([how to create one](https://docs.uptycs.com/articles/#!user-guide/api-access))
 
@@ -173,7 +166,6 @@ Restart your MCP client. You should see Juno tools available.
 |------|-------------|
 | `get_run` | Get a completed run's summary, tasks, and suggested prompts |
 | `get_findings` | Get all findings with evidence, recommendations, and visualizations |
-| `get_finding` | Get a single finding by title with full evidence and visualizations |
 | `stream_run` | Wait for a run to complete, streaming progress updates |
 | `create_follow_up` | Ask a follow-up question on an existing run |
 | `publish_run` | Share a run with your team |
@@ -188,19 +180,11 @@ Restart your MCP client. You should see Juno tools available.
 | `create_project` | Create a new project to organize investigations |
 | `delete_project` | Delete a project |
 
-### SQL
-
-| Tool | Description |
-|------|-------------|
-| `sql_translate` | Translate natural language to Trino SQL against the Uptycs data lake |
-
 ## Environment variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPTYCS_API_KEY_FILE` | Yes | — | Path to your Uptycs API key JSON file |
-| `JUNO_MCP_LOG_LEVEL` | No | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `JUNO_MCP_READ_ONLY` | No | `false` | Set to `true` to disable write tools (create, delete, publish) |
 | `JUNO_MCP_FULL_RESPONSE` | No | `false` | Return full API responses including all findings and table rows |
 | `JUNO_RESPONSE_FORMAT` | No | `markdown` | Response format: `markdown` or `json` |
 

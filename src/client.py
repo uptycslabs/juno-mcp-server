@@ -29,7 +29,7 @@ class JunoApiError(Exception):
 
 
 def _raise_for_status(resp: httpx.Response) -> None:
-    """Like ``_raise_for_status(resp)`` but includes the response body."""
+    """Raise ``JunoApiError`` for non-2xx responses, including the body."""
     if resp.is_success:
         return
     body = resp.text[:300]
@@ -58,17 +58,9 @@ class JunoClient:
     (keep-alive / HTTP/2) and injects a fresh JWT on every request.
     """
 
-    def __init__(
-        self,
-        api_key: ApiKey,
-        *,
-        beta: bool = False,
-        connector_ids: list[str] | None = None,
-    ) -> None:
+    def __init__(self, api_key: ApiKey) -> None:
         self._key = api_key
         self._base = api_key.api_base
-        self._beta = beta
-        self._connector_ids = connector_ids or []
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
             event_hooks={
@@ -87,13 +79,11 @@ class JunoClient:
         self, request: httpx.Request,
     ) -> None:
         request.headers.update(auth_headers(self._key))
-        if self._beta:
-            request.headers["X-Juno-Beta"] = "true"
 
     @staticmethod
     async def _log_request(request: httpx.Request) -> None:
         logger.debug(
-            "HTTP %s %s", request.method, request.url,
+            "HTTP %s %s", request.method, request.url.copy_with(query=None),
         )
 
     @staticmethod
@@ -103,12 +93,8 @@ class JunoClient:
         req = response.request
         logger.debug(
             "HTTP %s %s -> %s",
-            req.method, req.url, response.status_code,
+            req.method, req.url.copy_with(query=None), response.status_code,
         )
-
-    # --------------------------------------------------------------
-    # Investigations
-    # --------------------------------------------------------------
 
     async def list_investigations(
         self,
@@ -158,8 +144,6 @@ class JunoClient:
         body: dict[str, Any] = {"question": question}
         if project_id:
             body["projectId"] = project_id
-        if self._connector_ids:
-            body["connectorIds"] = self._connector_ids
 
         resp = await self._http.post(
             f"{self._base}/investigations",
@@ -176,10 +160,6 @@ class JunoClient:
             f"/{investigation_id}",
         )
         _raise_for_status(resp)
-
-    # --------------------------------------------------------------
-    # Runs
-    # --------------------------------------------------------------
 
     def _run_url(
         self, investigation_id: str, run_id: str,
@@ -214,7 +194,6 @@ class JunoClient:
         """
         url = f"{self._run_url(investigation_id, run_id)}/events"
         logger.info("SSE connecting: %s", url)
-        # Dedicated client — isolated connection pool for SSE.
         sse_http = httpx.AsyncClient(
             timeout=httpx.Timeout(300.0, connect=10.0),
             event_hooks={
@@ -237,7 +216,6 @@ class JunoClient:
                 buf = ""
                 async for chunk in resp.aiter_text():
                     buf += chunk
-                    # Process complete lines from the buffer
                     while "\n" in buf:
                         line, buf = buf.split("\n", 1)
                         line = line.rstrip("\r")
@@ -246,7 +224,6 @@ class JunoClient:
                         elif line.startswith("data:"):
                             data_lines.append(line[len("data:"):].strip())
                         elif line == "":
-                            # Empty line = end of SSE event
                             if data_lines:
                                 raw = "\n".join(data_lines)
                                 try:
@@ -272,8 +249,6 @@ class JunoClient:
             "question": question,
             "parentRunId": parent_run_id,
         }
-        if self._connector_ids:
-            body["connectorIds"] = self._connector_ids
         resp = await self._http.post(
             f"{self._base}/investigations"
             f"/{investigation_id}/runs",
@@ -297,10 +272,6 @@ class JunoClient:
         resp = await self._http.put(f"{url}/unpublish")
         _raise_for_status(resp)
         return _parse_json(resp)
-
-    # --------------------------------------------------------------
-    # Published runs
-    # --------------------------------------------------------------
 
     async def list_published_runs(
         self,
@@ -327,10 +298,6 @@ class JunoClient:
             "items": data.get("items", []),
             "nextCursor": _extract_cursor(data),
         }
-
-    # --------------------------------------------------------------
-    # Projects
-    # --------------------------------------------------------------
 
     async def list_projects(
         self,
@@ -373,22 +340,3 @@ class JunoClient:
             f"{self._base}/projects/{project_id}",
         )
         _raise_for_status(resp)
-
-    # --------------------------------------------------------------
-    # SQL Translation
-    # --------------------------------------------------------------
-
-    async def translate_to_sql(
-        self, query: str,
-    ) -> dict[str, Any]:
-        resp = await self._http.post(
-            self._key.translate_url,
-            json={
-                "query": query,
-                "filterType": "sql",
-                "customerDomain": self._key.domain,
-            },
-            timeout=httpx.Timeout(300.0, connect=10.0),
-        )
-        _raise_for_status(resp)
-        return _parse_json(resp)

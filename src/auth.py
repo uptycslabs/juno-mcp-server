@@ -32,6 +32,11 @@ class ApiKey:
             data = json.loads(p.read_text())
         except json.JSONDecodeError as exc:
             raise SystemExit(f"Invalid JSON in API key file {p}: {exc}")
+        if not isinstance(data, dict):
+            raise SystemExit(
+                f"API key file {p} must contain a JSON object, "
+                f"got {type(data).__name__}"
+            )
         missing = [f for f in cls._REQUIRED_FIELDS if f not in data]
         if missing:
             raise SystemExit(
@@ -54,13 +59,6 @@ class ApiKey:
         return (
             f"{self.base_url}/public/api/v2/customers"
             f"/{self.customer_id}/juno"
-        )
-
-    @property
-    def translate_url(self) -> str:
-        return (
-            f"{self.base_url}/public/api/v2/customers"
-            f"/{self.customer_id}/translations"
         )
 
 

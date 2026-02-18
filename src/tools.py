@@ -9,22 +9,19 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
+import httpx
 from mcp.types import ImageContent, TextContent, Tool
 
 from .client import JunoClient
-from .charts import render_png_b64, viz_to_echart
+from .charts import render_viz_b64
 
 logger = logging.getLogger("juno_mcp.tools")
 
 _POLL_INTERVAL = 5
-
-
-# ==================================================================
-# ToolDef dataclass
-# ==================================================================
 
 @dataclass(frozen=True)
 class ToolDef:
@@ -34,21 +31,33 @@ class ToolDef:
     description: str
     schema: dict[str, Any]
     handler: Callable[[JunoClient, dict[str, Any]], Awaitable[str]]
-    write: bool = False
 
 
 def _text(content: str) -> list[TextContent]:
     return [TextContent(type="text", text=content)]
 
 
-# Accumulator for chart images generated during formatting.
-# Populated by _md_viz, consumed by dispatch().
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _validate_uuid(args: dict[str, Any], *keys: str) -> None:
+    """Raise ``ValueError`` if any *keys* in *args* are not valid UUIDs."""
+    for key in keys:
+        value = args.get(key)
+        if value is not None and not _UUID_RE.match(str(value)):
+            raise ValueError(
+                f"'{key}' must be a plain UUID "
+                f"(e.g. 684ff06a-1234-5678-9abc-def012345678), "
+                f"got: {value!r}"
+            )
+
+
+# Chart images accumulated by _md_viz(), consumed by dispatch().
 _pending_images: list[ImageContent] = []
 
-
-# ==================================================================
-# Response filtering
-# ==================================================================
 
 _FULL_RESPONSE = (
     os.environ.get("JUNO_MCP_FULL_RESPONSE", "false")
@@ -163,14 +172,10 @@ def _truncate_viz_data(data: dict) -> None:
                 viz["truncated"] = True
                 viz["total_rows"] = total
 
-
-# ==================================================================
-# Investigation handlers
-# ==================================================================
-
 async def _list_investigations(
     client: JunoClient, args: dict[str, Any],
 ) -> str:
+    _validate_uuid(args, "project_id")
     data = await client.list_investigations(
         search=args.get("search"),
         limit=args.get("limit", 5),
@@ -183,6 +188,7 @@ async def _list_investigations(
 async def _get_investigation(
     client: JunoClient, args: dict[str, Any],
 ) -> str:
+    _validate_uuid(args, "investigation_id")
     data = await client.get_investigation(
         args["investigation_id"],
     )
@@ -193,6 +199,7 @@ async def _get_investigation(
 async def _create_investigation(
     client: JunoClient, args: dict[str, Any],
 ) -> str:
+    _validate_uuid(args, "project_id")
     data = await client.create_investigation(
         question=args["question"],
         project_id=args.get("project_id"),
@@ -200,21 +207,17 @@ async def _create_investigation(
     return json.dumps(data, indent=2, default=str)
 
 
-
 async def _delete_investigation(
     client: JunoClient, args: dict[str, Any],
 ) -> str:
+    _validate_uuid(args, "investigation_id")
     await client.delete_investigation(
         args["investigation_id"],
     )
     return f"Investigation {args['investigation_id']} deleted."
 
-
-# ==================================================================
-# Run handlers
-# ==================================================================
-
 async def _get_run(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "investigation_id", "run_id")
     data = await client.get_run(
         args["investigation_id"], args["run_id"],
     )
@@ -229,6 +232,7 @@ async def _get_run(client: JunoClient, args: dict[str, Any]) -> str:
 
 
 async def _get_findings(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "investigation_id", "run_id")
     data = await client.get_run(
         args["investigation_id"], args["run_id"],
     )
@@ -245,50 +249,20 @@ async def _get_findings(client: JunoClient, args: dict[str, Any]) -> str:
     return json.dumps(findings, indent=2, default=str)
 
 
-async def _get_finding(client: JunoClient, args: dict[str, Any]) -> str:
-    data = await client.get_run(
-        args["investigation_id"], args["run_id"],
-    )
-    status = data.get("status", "unknown")
-    if status not in ("completed", "failed", "error"):
-        return (
-            f"Run is still **{status}**. "
-            f"Use **stream_run** to wait for completion before fetching findings."
-        )
-    findings = data.get("findings", [])
-    if not findings:
-        return "No findings for this run."
-
-    finding_title = args["finding_title"].lower()
-    for f in findings:
-        if f.get("title", "").lower() == finding_title:
-            return json.dumps(f, indent=2, default=str)
-
-    # Partial match fallback
-    for f in findings:
-        if finding_title in f.get("title", "").lower():
-            return json.dumps(f, indent=2, default=str)
-
-    available = [f.get("title", "") for f in findings]
-    return json.dumps(
-        {"error": "Finding not found", "available_findings": available},
-        indent=2,
-    )
-
-
-
 async def _stream_run_handler(
     client: JunoClient,
     args: dict[str, Any],
     on_progress: ProgressCallback | None = None,
 ) -> str:
+    _validate_uuid(args, "investigation_id", "run_id")
     inv_id = args["investigation_id"]
     run_id = args["run_id"]
-    timeout = 15  # Hard-coded; Claude.ai overrides schema defaults
+    timeout = 20
     return await _poll_run(client, inv_id, run_id, timeout, on_progress)
 
 
 async def _create_follow_up(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "investigation_id", "parent_run_id")
     data = await client.create_follow_up(
         investigation_id=args["investigation_id"],
         parent_run_id=args["parent_run_id"],
@@ -298,11 +272,13 @@ async def _create_follow_up(client: JunoClient, args: dict[str, Any]) -> str:
 
 
 async def _publish_run(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "investigation_id", "run_id")
     await client.publish_run(args["investigation_id"], args["run_id"])
     return f"Run {args['run_id']} published."
 
 
 async def _unpublish_run(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "investigation_id", "run_id")
     await client.unpublish_run(args["investigation_id"], args["run_id"])
     return f"Run {args['run_id']} unpublished."
 
@@ -314,11 +290,6 @@ async def _list_published_runs(client: JunoClient, args: dict[str, Any]) -> str:
         cursor=args.get("cursor"),
     )
     return json.dumps(data, indent=2, default=str)
-
-
-# ==================================================================
-# Project handlers
-# ==================================================================
 
 async def _list_projects(
     client: JunoClient, args: dict[str, Any],
@@ -343,33 +314,10 @@ async def _create_project(
 async def _delete_project(
     client: JunoClient, args: dict[str, Any],
 ) -> str:
+    _validate_uuid(args, "project_id")
     await client.delete_project(args["project_id"])
     return f"Project {args['project_id']} deleted."
 
-
-# ==================================================================
-# SQL translate handler
-# ==================================================================
-
-async def _translate_to_sql(
-    client: JunoClient, args: dict[str, Any],
-) -> str:
-    data = await client.translate_to_sql(
-        query=args["question"],
-    )
-    filt = data.get("filter") or {}
-    result = {
-        "query": filt.get("query", "") if isinstance(filt, dict) else filt,
-        "message": data.get("message", ""),
-    }
-    return json.dumps(result, indent=2, default=str)
-
-
-# ==================================================================
-# Shared helpers
-# ==================================================================
-
-# Type alias for progress callback: (progress, total, message) -> None
 ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
 
 
@@ -380,18 +328,16 @@ async def _poll_run(
     timeout: int,
     on_progress: ProgressCallback | None = None,
 ) -> str:
-    # Try SSE streaming first, fall back to polling
     try:
         return await asyncio.wait_for(
             _stream_run(client, inv_id, run_id, on_progress),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        # Return the latest known state so Claude can show progress
         logger.info("stream_run timed out after %ds, fetching current state", timeout)
         try:
             data = await asyncio.wait_for(
-                client.get_run(inv_id, run_id), timeout=15,
+                client.get_run(inv_id, run_id), timeout=20,
             )
             status = data.get("status", "unknown")
             if status in ("completed", "failed", "error"):
@@ -408,8 +354,8 @@ async def _poll_run(
                 f"Timed out after {timeout}s. Run {run_id} is still "
                 f"running.\nUse **stream_run** to check again later."
             )
-    except Exception:
-        logger.warning("SSE stream failed, falling back to polling", exc_info=True)
+    except (OSError, httpx.HTTPError) as exc:
+        logger.warning("SSE stream failed (%s), falling back to polling", exc)
         return await _poll_run_legacy(client, inv_id, run_id, timeout)
 
 
@@ -471,7 +417,7 @@ async def _stream_run(
                 break
             if on_progress:
                 msg = _task_progress_message(data)
-                if msg != last_msg:  # only send when status changes
+                if msg != last_msg:
                     last_msg = msg
                     tasks = data.get("tasks", [])
                     total = len(tasks) or None
@@ -491,8 +437,7 @@ async def _stream_run(
             logger.info("SSE done event received")
             break
         elif event_type == "error":
-            # Ignore transient "job not found" errors before the first
-            # update — the orchestrator may not have picked up the run yet.
+            # Ignore transient errors before first update
             if got_update:
                 raise RuntimeError(payload.get("error", "SSE error"))
             logger.debug("SSE transient error (pre-update): %s", payload)
@@ -500,7 +445,6 @@ async def _stream_run(
     if data:
         prepare_run_response(data)
         return json.dumps(data, indent=2, default=str)
-    # Stream ended without update — fetch final state
     data = await client.get_run(inv_id, run_id)
     prepare_run_response(data)
     return json.dumps(data, indent=2, default=str)
@@ -528,13 +472,7 @@ async def _poll_run_legacy(
         f"{status}.\nUse **stream_run** to check again later."
     )
 
-
-# ==================================================================
-# Tool definitions
-# ==================================================================
-
 _ALL_TOOLS: list[ToolDef] = [
-    # -- Investigations --
     ToolDef(
         name="list_investigations",
         description="List recent Juno investigations with optional search. Do NOT auto-paginate — only use cursor if the user explicitly asks for more.",
@@ -582,7 +520,6 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["question"],
         },
         handler=_create_investigation,
-        write=True,
     ),
     ToolDef(
         name="delete_investigation",
@@ -598,10 +535,7 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["investigation_id"],
         },
         handler=_delete_investigation,
-        write=True,
     ),
-
-    # -- Runs --
     ToolDef(
         name="get_run",
         description="Get a completed run's full details (summary, tasks, suggested prompts). Only use on runs with status 'completed'. For in-progress runs, use stream_run instead.",
@@ -641,29 +575,6 @@ _ALL_TOOLS: list[ToolDef] = [
         handler=_get_findings,
     ),
     ToolDef(
-        name="get_finding",
-        description="Get a single finding by title with full evidence, recommendations, and visualizations. Only use on completed runs.",
-        schema={
-            "type": "object",
-            "properties": {
-                "investigation_id": {
-                    "type": "string",
-                    "description": "Plain UUID (no prefix)",
-                },
-                "run_id": {
-                    "type": "string",
-                    "description": "Plain UUID (no prefix)",
-                },
-                "finding_title": {
-                    "type": "string",
-                    "description": "The finding title (exact or partial match)",
-                },
-            },
-            "required": ["investigation_id", "run_id", "finding_title"],
-        },
-        handler=_get_finding,
-    ),
-    ToolDef(
         name="stream_run",
         description=(
             "Wait for a run to complete, streaming SSE updates internally. "
@@ -684,8 +595,8 @@ _ALL_TOOLS: list[ToolDef] = [
                 },
                 "timeout_seconds": {
                     "type": "integer",
-                    "default": 15,
-                    "description": "Max seconds to wait (default 15)",
+                    "default": 20,
+                    "description": "Max seconds to wait (default 20)",
                 },
             },
             "required": ["investigation_id", "run_id"],
@@ -711,7 +622,6 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["investigation_id", "parent_run_id", "question"],
         },
         handler=_create_follow_up,
-        write=True,
     ),
     ToolDef(
         name="publish_run",
@@ -731,7 +641,6 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["investigation_id", "run_id"],
         },
         handler=_publish_run,
-        write=True,
     ),
     ToolDef(
         name="unpublish_run",
@@ -751,7 +660,6 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["investigation_id", "run_id"],
         },
         handler=_unpublish_run,
-        write=True,
     ),
     ToolDef(
         name="list_published_runs",
@@ -766,8 +674,6 @@ _ALL_TOOLS: list[ToolDef] = [
         },
         handler=_list_published_runs,
     ),
-
-    # -- Projects --
     ToolDef(
         name="list_projects",
         description="List Juno projects. Do NOT auto-paginate — only use cursor if the user explicitly asks for more.",
@@ -792,7 +698,6 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["name"],
         },
         handler=_create_project,
-        write=True,
     ),
     ToolDef(
         name="delete_project",
@@ -808,60 +713,17 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["project_id"],
         },
         handler=_delete_project,
-        write=True,
-    ),
-
-    # -- SQL Translate --
-    ToolDef(
-        name="sql_translate",
-        description=(
-            "Translate a natural language question into a Trino SQL query "
-            "against the Uptycs data lake. Returns the generated SQL and "
-            "a summary message."
-        ),
-        schema={
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": (
-                        "Natural language question to translate to SQL, "
-                        "e.g. 'Show EC2 instances with public IPs'"
-                    ),
-                },
-            },
-            "required": ["question"],
-        },
-        handler=_translate_to_sql,
     ),
 ]
 
 _HANDLERS: dict[str, ToolDef] = {td.name: td for td in _ALL_TOOLS}
-_WRITE_TOOL_NAMES: set[str] = {td.name for td in _ALL_TOOLS if td.write}
 
-
-# ==================================================================
-# Public API
-# ==================================================================
-
-def get_all_tools(*, read_only: bool = True) -> list[Tool]:
-    """Return MCP Tool objects, filtering out write tools in read-only mode."""
-    tools = []
-    for td in _ALL_TOOLS:
-        if read_only and td.write:
-            continue
-        tools.append(
-            Tool(
-                name=td.name,
-                description=td.description,
-                inputSchema=td.schema,
-            )
-        )
-    return tools
-
-
-def is_write_tool(name: str) -> bool:
-    return name in _WRITE_TOOL_NAMES
+def get_all_tools() -> list[Tool]:
+    """Return all MCP Tool objects."""
+    return [
+        Tool(name=td.name, description=td.description, inputSchema=td.schema)
+        for td in _ALL_TOOLS
+    ]
 
 
 async def dispatch(
@@ -877,14 +739,12 @@ async def dispatch(
     else:
         result = await td.handler(client, arguments)
 
-    # Clear image accumulator before formatting (formatting may add images)
     _pending_images.clear()
 
     if _RESPONSE_FORMAT == "markdown":
         result = _try_format_markdown(name, result)
 
     content: list[TextContent | ImageContent] = _text(result)
-    # Append any chart images generated during markdown formatting
     if _pending_images:
         content.extend(_pending_images)
         _pending_images.clear()
@@ -898,11 +758,6 @@ def _try_format_markdown(name: str, result: str) -> str:
     except (json.JSONDecodeError, TypeError):
         return result
     return format_markdown(name, data)
-
-
-# ==================================================================
-# Markdown formatting
-# ==================================================================
 
 def _esc(value: Any) -> str:
     """Escape a value for use inside a markdown table cell."""
@@ -945,9 +800,9 @@ def _md_table_ref(ref: dict) -> str:
 
 
 def _md_viz(viz: dict) -> str:
-    """Render a visualization as an ECharts image with a data table.
+    """Render a visualization as a chart image with a data table.
 
-    Renders via ECharts SSR and appends the image to
+    Renders via matplotlib and appends the image to
     ``_pending_images``.  Always includes a data table alongside.
     """
     parts: list[str] = []
@@ -956,23 +811,18 @@ def _md_viz(viz: dict) -> str:
     if viz.get("description"):
         parts.append(viz["description"])
 
-    # Mermaid diagrams (architecture, flow, sequence) — pass through with ELK layout
     schema = viz.get("schema") or {}
     mermaid_code = schema.get("mermaidCode", "")
     if mermaid_code:
         elk_directive = '%%{init: {"flowchart": {"defaultRenderer": "elk"}} }%%'
         parts.append(f"```mermaid\n{elk_directive}\n{mermaid_code}\n```")
 
-    # ECharts rendering for data visualizations
-    echart_option = viz_to_echart(viz)
-    if echart_option is not None:
-        b64 = render_png_b64(echart_option)
-        if b64:
-            _pending_images.append(
-                ImageContent(type="image", data=b64, mimeType="image/png")
-            )
+    b64 = render_viz_b64(viz)
+    if b64:
+        _pending_images.append(
+            ImageContent(type="image", data=b64, mimeType="image/png")
+        )
 
-    # Always include data table
     data = viz.get("data", [])
     if data:
         cols = list(data[0].keys())
@@ -993,9 +843,6 @@ def _cursor_line(data: dict) -> str:
             f"Only fetch more if the user explicitly asks._"
         )
     return ""
-
-
-# -- Investigation formatters --
 
 def _fmt_investigation_list(data: dict) -> str:
     items = data.get("items", [])
@@ -1048,9 +895,6 @@ def _fmt_investigation(data: dict) -> str:
 
     return "\n".join(parts)
 
-
-# -- Run formatters --
-
 def _fmt_run(data: dict) -> str:
     parts: list[str] = []
     parts.append(f"# Run: {data.get('id', '')}")
@@ -1100,9 +944,6 @@ def _append_suggested_prompts(parts: list[str], data: dict) -> None:
     parts.append("## Suggested Follow-ups")
     for p in prompts:
         parts.append(f"- {p}")
-
-
-# -- Findings formatters --
 
 def _fmt_findings(findings: list[dict]) -> str:
     if not findings:
@@ -1169,76 +1010,6 @@ def _fmt_findings(findings: list[dict]) -> str:
     parts.append("---")
     return "\n".join(parts)
 
-
-def _fmt_finding(finding: dict) -> str:
-    if "error" in finding:
-        parts = [f"**Error:** {finding['error']}"]
-        available = finding.get("available_findings", [])
-        if available:
-            parts.append("")
-            parts.append("**Available findings:**")
-            for t in available:
-                parts.append(f"- {t}")
-        return "\n".join(parts)
-
-    parts: list[str] = [f"# {finding.get('title', 'Finding')}"]
-    parts.append("")
-    parts.append(_bullet("Severity", finding.get("severity")))
-    parts.append(_bullet("Threat Type", finding.get("threatType")))
-
-    assets = finding.get("affectedAssets", [])
-    if assets:
-        parts.append(
-            _bullet("Affected Assets", ", ".join(str(a) for a in assets))
-        )
-
-    desc = finding.get("description", "")
-    if desc:
-        parts.append("")
-        parts.append(desc)
-
-    evidence = finding.get("evidence", {})
-    if evidence:
-        parts.append("")
-        parts.append("## Evidence")
-        if isinstance(evidence, dict) and "columns" in evidence:
-            parts.append(
-                _md_table(
-                    evidence.get("columns", []),
-                    evidence.get("rows", []),
-                )
-            )
-        else:
-            parts.append(
-                f"```json\n"
-                f"{json.dumps(evidence, indent=2, default=str)}\n"
-                f"```"
-            )
-
-    recs = finding.get("recommendations", [])
-    if recs:
-        parts.append("")
-        parts.append("## Recommendations")
-        for i, rec in enumerate(recs, 1):
-            desc_r = rec.get("description", "")
-            parts.append(f"{i}. {desc_r}")
-            cmd = rec.get("command", "")
-            if cmd:
-                parts.append(f"   ```\n   {cmd}\n   ```")
-            platform = rec.get("platform", "")
-            if platform:
-                parts.append(f"   _(Platform: {platform})_")
-
-    viz = finding.get("visualization")
-    if viz:
-        parts.append("")
-        parts.append(_md_viz(viz))
-
-    return "\n".join(parts)
-
-
-# -- Published runs formatter --
-
 def _fmt_published_run_list(data: dict) -> str:
     items = data.get("items", [])
     if not items:
@@ -1258,9 +1029,6 @@ def _fmt_published_run_list(data: dict) -> str:
         lines.append(f"| {i} | {run_id} | {inv_id} | {title} | {question} |")
     lines.append(_cursor_line(data))
     return "\n".join(lines)
-
-
-# -- Project formatters --
 
 def _fmt_project_list(data: dict) -> str:
     items = data.get("items", [])
@@ -1290,9 +1058,6 @@ def _fmt_project(data: dict) -> str:
     ]
     return "\n".join(parts)
 
-
-# -- Follow-up formatter --
-
 def _fmt_follow_up(data: dict) -> str:
     parts = [
         "# Follow-up Created",
@@ -1304,27 +1069,6 @@ def _fmt_follow_up(data: dict) -> str:
     ]
     return "\n".join(parts)
 
-
-# -- SQL translate formatter --
-
-def _fmt_sql_translate(data: dict) -> str:
-    parts: list[str] = ["# SQL Translation"]
-
-    sql = data.get("query", "")
-    if sql:
-        parts.append("")
-        parts.append(f"```sql\n{sql}\n```")
-
-    msg = data.get("message", "")
-    if msg:
-        parts.append("")
-        parts.append(msg)
-
-    return "\n".join(parts)
-
-
-# -- Formatter registry --
-
 _FORMATTERS: dict[str, Any] = {
     "list_investigations": _fmt_investigation_list,
     "get_investigation": _fmt_investigation,
@@ -1332,14 +1076,12 @@ _FORMATTERS: dict[str, Any] = {
     "get_run": _fmt_run,
     "stream_run": _fmt_run,
     "get_findings": _fmt_findings,
-    "get_finding": _fmt_finding,
     "create_follow_up": _fmt_follow_up,
     "list_published_runs": _fmt_published_run_list,
     "list_projects": _fmt_project_list,
     "create_project": _fmt_project,
     "publish_run": _fmt_run,
     "unpublish_run": _fmt_run,
-    "sql_translate": _fmt_sql_translate,
 }
 
 
