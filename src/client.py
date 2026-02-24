@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -61,6 +60,10 @@ class JunoClient:
     def __init__(self, api_key: ApiKey) -> None:
         self._key = api_key
         self._base = api_key.api_base
+        self._console_base = (
+            f"https://{api_key.domain}{api_key.domain_suffix}"
+            f"/ui/juno/investigations"
+        )
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
             event_hooks={
@@ -71,6 +74,15 @@ class JunoClient:
                 "response": [self._log_response],
             },
         )
+
+    def console_url(
+        self, investigation_id: str, run_id: str | None = None,
+    ) -> str:
+        """Return the Uptycs console URL for an investigation or run."""
+        url = f"{self._console_base}/{investigation_id}"
+        if run_id:
+            url = f"{url}/{run_id}"
+        return url
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -102,15 +114,12 @@ class JunoClient:
         search: str | None = None,
         limit: int = 5,
         cursor: str | None = None,
-        project_id: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": limit}
         if search:
             params["searchTerms"] = search
         if cursor:
             params["cursor"] = cursor
-        if project_id:
-            params["projectId"] = project_id
 
         resp = await self._http.get(
             f"{self._base}/investigations",
@@ -138,12 +147,8 @@ class JunoClient:
     async def create_investigation(
         self,
         question: str,
-        *,
-        project_id: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"question": question}
-        if project_id:
-            body["projectId"] = project_id
 
         resp = await self._http.post(
             f"{self._base}/investigations",
@@ -177,67 +182,6 @@ class JunoClient:
         )
         _raise_for_status(resp)
         return _parse_json(resp)
-
-    async def stream_run_events(
-        self,
-        investigation_id: str,
-        run_id: str,
-    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        """Stream SSE events for a run.
-
-        Yields ``(event_type, data)`` tuples.
-        Event types: ``connected``, ``update``, ``done``, ``error``.
-
-        Uses a **separate** ``httpx.AsyncClient`` so that cancellation
-        (e.g. from ``asyncio.wait_for``) does not corrupt the connection
-        pool used by regular API calls like ``get_run``.
-        """
-        url = f"{self._run_url(investigation_id, run_id)}/events"
-        logger.info("SSE connecting: %s", url)
-        sse_http = httpx.AsyncClient(
-            timeout=httpx.Timeout(300.0, connect=10.0),
-            event_hooks={
-                "request": [self._inject_auth, self._log_request],
-                "response": [self._log_response],
-            },
-        )
-        try:
-            req = sse_http.build_request("GET", url)
-            resp = await sse_http.send(req, stream=True)
-            try:
-                _raise_for_status(resp)
-                logger.info(
-                    "SSE connected: %s (status %s, content-type=%s)",
-                    url, resp.status_code,
-                    resp.headers.get("content-type", "?"),
-                )
-                event_type = "message"
-                data_lines: list[str] = []
-                buf = ""
-                async for chunk in resp.aiter_text():
-                    buf += chunk
-                    while "\n" in buf:
-                        line, buf = buf.split("\n", 1)
-                        line = line.rstrip("\r")
-                        if line.startswith("event:"):
-                            event_type = line[len("event:"):].strip()
-                        elif line.startswith("data:"):
-                            data_lines.append(line[len("data:"):].strip())
-                        elif line == "":
-                            if data_lines:
-                                raw = "\n".join(data_lines)
-                                try:
-                                    payload = json.loads(raw)
-                                except json.JSONDecodeError:
-                                    payload = {"raw": raw}
-                                logger.info("SSE event: %s", event_type)
-                                yield event_type, payload
-                            event_type = "message"
-                            data_lines = []
-            finally:
-                await resp.aclose()
-        finally:
-            await sse_http.aclose()
 
     async def create_follow_up(
         self,
@@ -299,44 +243,3 @@ class JunoClient:
             "nextCursor": _extract_cursor(data),
         }
 
-    async def list_projects(
-        self,
-        *,
-        limit: int = 5,
-        cursor: str | None = None,
-    ) -> dict[str, Any]:
-        params: dict[str, Any] = {"limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-
-        resp = await self._http.get(
-            f"{self._base}/projects", params=params,
-        )
-        _raise_for_status(resp)
-        data = _parse_json(resp)
-        if isinstance(data, list):
-            return {"items": data, "nextCursor": ""}
-        return {
-            "items": data.get("items", []),
-            "nextCursor": _extract_cursor(data),
-        }
-
-    async def create_project(
-        self, name: str, description: str = "",
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"name": name}
-        if description:
-            body["description"] = description
-        resp = await self._http.post(
-            f"{self._base}/projects", json=body,
-        )
-        _raise_for_status(resp)
-        return _parse_json(resp)
-
-    async def delete_project(
-        self, project_id: str,
-    ) -> None:
-        resp = await self._http.delete(
-            f"{self._base}/projects/{project_id}",
-        )
-        _raise_for_status(resp)

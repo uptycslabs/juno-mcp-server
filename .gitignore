@@ -1,41 +1,35 @@
+# Python
 __pycache__/
-*.py[codz]
-*$py.class
-*.so
-
-build/
-dist/
+*.py[cod]
 *.egg-info/
-*.egg
-MANIFEST
+dist/
+build/
 
-*.log
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.pytest_cache/
+# Virtual environments
+.venv/
 
-.env
-.envrc
-.venv
-env/
-venv/
+# Lockfile
+uv.lock
 
-.mypy_cache/
-.ruff_cache/
-.pytype/
-
-dev/
+# Logs
 logs/
 
-*.json
-!.vscode/*.json
+# IDE / editor
+.vscode/
+.cursor/
+.idea/
 
+# Claude Code
+.claude/
+
+# Dev / scratch
+dev/
+files/
+
+# macOS
 .DS_Store
 
-.pid
-.mcp-pid
-
-uv.lock
+# Windsurf
+.project/
+copilot-messages.log
+.gitattributes

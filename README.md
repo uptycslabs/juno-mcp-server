@@ -3,7 +3,7 @@
   <img src="https://www.uptycs.com/hubfs/uptycs_logo_2C_on-light_rgb-1.svg" alt="Uptycs" height="32" align="right">
 </h1>
 
-MCP server for [Uptycs Juno](https://www.uptycs.com/juno-ai) — the AI-powered security analyst.
+MCP server for [Uptycs Juno](https://www.uptycs.com/juno-ai) — the AI-powered security assistant.
 
 Connect Juno to any MCP-compatible client to investigate threats, analyze findings, and manage security investigations.
 
@@ -50,13 +50,13 @@ sequenceDiagram
     Server-->>Client: investigation created
     deactivate Server
 
-    Client->>Server: stream_run(investigation_id, run_id)
+    Client->>Server: get_run(investigation_id, run_id)
     activate Server
-    loop SSE streaming
-        Server->>Juno: GET /runs/{id}/stream
-        Juno-->>Server: progress updates
-    end
-    Server-->>Client: completed run with findings
+    Server->>Juno: GET /runs/{id}
+    activate Juno
+    Juno-->>Server: run with findings, tasks, summary
+    deactivate Juno
+    Server-->>Client: full run results
     deactivate Server
 
     Note over Client,Juno: Follow-up
@@ -75,18 +75,24 @@ sequenceDiagram
 - **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
 - **Analyze findings** — "Show me the findings and recommendations from that investigation"
 - **Follow up** — "What user accounts were involved in the lateral movement?"
-- **Manage investigations** — List, create, delete, and organize investigations into projects
-- **Share with your team** — Publish investigation runs for team visibility
+- **Manage investigations** — List, create, and delete investigations
+- **Share** — Publish investigation runs for others to see
 
 ## Prerequisites
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
 - An Uptycs account with Juno enabled
 - An Uptycs API key ([how to create one](https://docs.uptycs.com/articles/#!user-guide/api-access))
 
-## Quick start
+## Installation
 
-### 1. Get your API key
+```bash
+git clone https://github.com/uptycslabs/juno-mcp-server.git
+cd juno-mcp-server
+```
+
+### API key
 
 Download your API key JSON file from the Uptycs console (**Configuration > API Keys**):
 
@@ -100,36 +106,9 @@ Download your API key JSON file from the Uptycs console (**Configuration > API K
 }
 ```
 
-### 2. Configure your MCP client
+### Configure your MCP client
 
-Example using Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
-<details>
-<summary><strong>Option A: Remote — no clone needed</strong></summary>
-
-```json
-{
-  "mcpServers": {
-    "juno": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/uptycslabs/juno-mcp-server", "juno-mcp"],
-      "env": {
-        "UPTYCS_API_KEY_FILE": "/path/to/apikey.json"
-      }
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><strong>Option B: Local clone</strong></summary>
-
-```bash
-git clone https://github.com/uptycslabs/juno-mcp-server.git
-cd juno-mcp-server
-```
+Add the following to your MCP client configuration. Example for Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -145,8 +124,6 @@ cd juno-mcp-server
 }
 ```
 
-</details>
-
 Restart your MCP client. You should see Juno tools available.
 
 ## Tools
@@ -155,38 +132,31 @@ Restart your MCP client. You should see Juno tools available.
 
 | Tool | Description |
 |------|-------------|
-| `list_investigations` | List recent investigations with optional search and pagination |
-| `get_investigation` | Get details of a specific investigation including its runs |
 | `create_investigation` | Start a new security investigation |
-| `delete_investigation` | Delete an investigation and all its runs |
+| `list_investigations` | List recent investigations |
+| `get_investigation` | Get investigation details |
+| `delete_investigation` | Delete an investigation |
 
-### Runs
-
-| Tool | Description |
-|------|-------------|
-| `get_run` | Get a completed run's summary, tasks, and suggested prompts |
-| `get_findings` | Get all findings with evidence, recommendations, and visualizations |
-| `stream_run` | Wait for a run to complete, streaming progress updates |
-| `create_follow_up` | Ask a follow-up question on an existing run |
-| `publish_run` | Share a run with your team |
-| `unpublish_run` | Remove a run from the published list |
-| `list_published_runs` | Browse team-published investigation runs |
-
-### Projects
+### Runs & Follow-ups
 
 | Tool | Description |
 |------|-------------|
-| `list_projects` | List projects |
-| `create_project` | Create a new project to organize investigations |
-| `delete_project` | Delete a project |
+| `get_run` | Get investigation run results |
+| `create_follow_up` | Ask a follow-up question on a completed run |
+
+### Sharing
+
+| Tool | Description |
+|------|-------------|
+| `publish_run` | Share a run with other users |
+| `unpublish_run` | Unshare a run |
+| `list_published_runs` | List shared runs |
 
 ## Environment variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPTYCS_API_KEY_FILE` | Yes | — | Path to your Uptycs API key JSON file |
-| `JUNO_MCP_FULL_RESPONSE` | No | `false` | Return full API responses including all findings and table rows |
-| `JUNO_RESPONSE_FORMAT` | No | `markdown` | Response format: `markdown` or `json` |
 
 ## License
 
