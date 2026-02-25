@@ -73,7 +73,6 @@ sequenceDiagram
 ## What you can do
 
 - **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
-- **Analyze findings** — "Show me the findings and recommendations from that investigation"
 - **Follow up** — "What user accounts were involved in the lateral movement?"
 - **Manage investigations** — List, create, and delete investigations
 - **Share** — Publish investigation runs for others to see

@@ -1,21 +1,16 @@
-"""Tool registry — all Juno MCP tools in one place.
-
-Handlers, schemas, and markdown formatting.
-"""
+"""Tool registry — all Juno MCP tools in one place."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
 
-from mcp.types import ImageContent, TextContent, Tool
+from mcp.types import TextContent, Tool
 
 from .client import JunoClient
-from .charts import render_viz_b64
 
 logger = logging.getLogger("juno_mcp.tools")
 
@@ -74,12 +69,6 @@ def _strip_keys(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_strip_keys(item) for item in obj]
     return obj
-
-
-_RESPONSE_FORMAT = os.environ.get("JUNO_RESPONSE_FORMAT", "json").lower()
-
-# Chart images accumulated by _md_viz(), consumed by dispatch().
-_pending_images: list[ImageContent] = []
 
 
 async def _list_investigations(client: JunoClient, args: dict[str, Any]) -> str:
@@ -256,7 +245,9 @@ _ALL_TOOLS: list[ToolDef] = [
         name="get_run",
         description=(
             "Get full run content: summarySections, findings (with severity, evidence, recommendations), "
-            "tasks, and suggestedPrompts. Also used to poll status after create_investigation or create_follow_up."
+            "tasks, and suggestedPrompts. Also used to poll status after create_investigation or create_follow_up. "
+            "If status is 'running' or 'pending', always poll again automatically without asking the user. "
+            "Continue polling until status is 'completed' or 'failed'."
         ),
         schema={
             "type": "object",
@@ -344,215 +335,8 @@ async def dispatch(
     name: str,
     arguments: dict[str, Any],
     client: JunoClient,
-) -> list[TextContent | ImageContent]:
+) -> list[TextContent]:
     """Dispatch a tool call by name. Raises KeyError for unknown tools."""
     td = _HANDLERS[name]
     result = await td.handler(client, arguments)
-
-    _pending_images.clear()
-
-    if _RESPONSE_FORMAT == "markdown":
-        result = _try_format_markdown(name, result)
-
-    content: list[TextContent | ImageContent] = _text(result)
-    if _pending_images:
-        content.extend(_pending_images)
-        _pending_images.clear()
-    return content
-
-
-def _try_format_markdown(name: str, result: str) -> str:
-    try:
-        data = json.loads(result)
-    except (json.JSONDecodeError, TypeError):
-        return result
-    return format_markdown(name, data)
-
-
-def _esc(value: Any) -> str:
-    s = str(value) if value is not None else ""
-    return s.replace("|", "\\|").replace("\n", " ")
-
-
-def _bullet(label: str, value: Any, fallback: str = "—") -> str:
-    return f"- **{label}**: {value if value else fallback}"
-
-
-def _md_table(columns: list[str], rows: list[dict]) -> str:
-    if not columns or not rows:
-        return ""
-    header = "| " + " | ".join(columns) + " |"
-    sep = "| " + " | ".join("---" for _ in columns) + " |"
-    lines = [header, sep]
-    for row in rows:
-        cells = [_esc(row.get(c, "")) for c in columns]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
-
-
-def _md_table_ref(ref: dict) -> str:
-    parts: list[str] = []
-    if ref.get("description"):
-        parts.append(ref["description"])
-    tbl = _md_table(ref.get("columns", []), ref.get("rows", []))
-    if tbl:
-        parts.append(tbl)
-    if ref.get("truncated"):
-        parts.append(f"_Showing {len(ref.get('rows', []))} of {ref.get('total_rows', '?')} rows_")
-    return "\n\n".join(parts)
-
-
-def _md_viz(viz: dict) -> str:
-    parts: list[str] = []
-    title = viz.get("title", "Visualization")
-    parts.append(f"**{title}**")
-    if viz.get("description"):
-        parts.append(viz["description"])
-
-    mermaid_code = (viz.get("schema") or {}).get("mermaidCode", "")
-    if mermaid_code:
-        elk = '%%{init: {"flowchart": {"defaultRenderer": "elk"}} }%%'
-        parts.append(f"```mermaid\n{elk}\n{mermaid_code}\n```")
-
-    b64 = render_viz_b64(viz)
-    if b64:
-        _pending_images.append(ImageContent(type="image", data=b64, mimeType="image/png"))
-
-    data = viz.get("data", [])
-    if data:
-        parts.append(_md_table(list(data[0].keys()), data))
-        if viz.get("truncated"):
-            parts.append(f"_Showing {len(data)} of {viz.get('total_rows', '?')} rows_")
-    return "\n\n".join(parts)
-
-
-def _cursor_line(data: dict) -> str:
-    cursor = data.get("nextCursor", "")
-    if cursor:
-        return f"\n_More results available (cursor: `{cursor}`). Only fetch more if the user explicitly asks._"
-    return ""
-
-
-def _append_summary_sections(parts: list[str], data: dict) -> None:
-    sections = data.get("summarySections", [])
-    if not sections:
-        return
-    parts.append("")
-    parts.append("## Summary")
-    for sec in sections:
-        parts.append("")
-        parts.append(f"### {sec.get('title', 'Section')}")
-        if sec.get("content"):
-            parts.append(sec["content"])
-        ref = sec.get("tableRef") or sec.get("table_ref")
-        if ref and ref.get("rows"):
-            parts.append("")
-            parts.append(_md_table_ref(ref))
-        viz = sec.get("visualization")
-        if viz:
-            parts.append("")
-            parts.append(_md_viz(viz))
-
-
-def _append_suggested_prompts(parts: list[str], data: dict) -> None:
-    prompts = data.get("suggestedPrompts", [])
-    if not prompts:
-        return
-    parts.append("")
-    parts.append("## Suggested Follow-ups")
-    for p in prompts:
-        parts.append(f"- {p}")
-
-
-def _fmt_investigation_list(data: dict) -> str:
-    items = data.get("items", [])
-    if not items:
-        return "No investigations found." + _cursor_line(data)
-    lines = ["# Investigations", "", "| # | ID | Title | Question |", "| --- | --- | --- | --- |"]
-    for i, inv in enumerate(items, 1):
-        lines.append(f"| {i} | {_esc(inv.get('id', ''))} | {_esc(inv.get('title', inv.get('question', '')))} | {_esc(inv.get('question', ''))} |")
-    lines.append(_cursor_line(data))
-    return "\n".join(lines)
-
-
-def _fmt_investigation(data: dict) -> str:
-    parts: list[str] = []
-    parts.append(f"# {data.get('title', data.get('question', 'Investigation'))}")
-    parts.append("")
-    parts.append(_bullet("Question", data.get("question")))
-    runs = data.get("runs", [])
-    if runs:
-        parts.append("")
-        parts.append("## Runs")
-        for run in runs:
-            parts.append("")
-            parts.append(f"### Run: {run.get('id', '')}")
-            parts.append(_bullet("Status", run.get("status")))
-            # Note: runs here are metadata-only (from get_investigation).
-            # summarySections and findings are not present — use get_run for full content.
-    return "\n".join(parts)
-
-
-def _fmt_run(data: dict) -> str:
-    parts: list[str] = [
-        f"# Run: {data.get('id', '')}",
-        "",
-        _bullet("Status", data.get("status")),
-        _bullet("Investigation", data.get("investigationId")),
-        _bullet("Question", data.get("question")),
-    ]
-    if data.get("errorMessage"):
-        parts.append(_bullet("Error", data["errorMessage"]))
-    _append_summary_sections(parts, data)
-    _append_suggested_prompts(parts, data)
-    return "\n".join(parts)
-
-
-def _fmt_published_run_list(data: dict) -> str:
-    items = data.get("items", [])
-    if not items:
-        return "No published runs found." + _cursor_line(data)
-    lines = [
-        "# Published Runs", "",
-        "| # | Run ID | Investigation ID | Title | Question |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for i, run in enumerate(items, 1):
-        lines.append(
-            f"| {i} | {_esc(run.get('id', ''))} | {_esc(run.get('investigationId', ''))} "
-            f"| {_esc(run.get('publishTitle', run.get('question', '')))} | {_esc(run.get('question', ''))} |"
-        )
-    lines.append(_cursor_line(data))
-    return "\n".join(lines)
-
-
-
-def _fmt_follow_up(data: dict) -> str:
-    return "\n".join([
-        "# Follow-up Created",
-        "",
-        _bullet("Run ID", data.get("id")),
-        _bullet("Investigation", data.get("investigationId")),
-        _bullet("Question", data.get("question")),
-        _bullet("Status", data.get("status")),
-    ])
-
-
-_FORMATTERS: dict[str, Any] = {
-    "list_investigations": _fmt_investigation_list,
-    "get_investigation": _fmt_investigation,
-    "create_investigation": _fmt_investigation,
-    "get_run": _fmt_run,
-    "create_follow_up": _fmt_follow_up,
-    "list_published_runs": _fmt_published_run_list,
-    "publish_run": _fmt_run,
-    "unpublish_run": _fmt_run,
-}
-
-
-def format_markdown(name: str, data: Any) -> str:
-    """Convert data to markdown using a formatter keyed by tool name."""
-    formatter = _FORMATTERS.get(name)
-    if formatter is None:
-        return json.dumps(data, indent=2, default=str)
-    return formatter(data)
+    return _text(result)

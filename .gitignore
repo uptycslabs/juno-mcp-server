@@ -1,35 +1,46 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+*.egg
 *.egg-info/
 dist/
 build/
+*.whl
 
 # Virtual environments
 .venv/
+venv/
+env/
+.python-version
 
-# Lockfile
+# Package manager
 uv.lock
+
+# Secrets & credentials
+*.pem
+*.key
+apikeys/
 
 # Logs
 logs/
+*.log
 
 # IDE / editor
 .vscode/
-.cursor/
 .idea/
-
-# Claude Code
+.cursor/
 .claude/
+.project/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Dev / scratch
 dev/
 files/
-
-# macOS
-.DS_Store
-
-# Windsurf
-.project/
-copilot-messages.log
-.gitattributes
