@@ -28,7 +28,6 @@ except Exception:
 _INSTRUCTIONS = """\
 You are using the Uptycs Juno AI Analyst MCP server.
 
-## What is Juno?
 Uptycs Juno is an AI-powered security analyst. Given a security question, Juno autonomously
 investigates across Uptycs telemetry and, on demand based on context, MCP connectors
 (CloudWatch, GitHub, Nuclei, etc.) to produce structured findings with severity, evidence,

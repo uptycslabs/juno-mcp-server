@@ -7,6 +7,13 @@ MCP server for [Uptycs Juno](https://www.uptycs.com/juno-ai) — the AI-powered 
 
 Connect Juno to any MCP-compatible client to investigate threats, analyze findings, and manage security investigations.
 
+## What you can do
+
+- **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
+- **Follow up** — "What user accounts were involved in the lateral movement?"
+- **Manage investigations** — List, create, and delete investigations
+- **Share** — Publish investigation runs for others to see
+
 ## How it works
 
 ```mermaid
@@ -28,54 +35,6 @@ flowchart LR
 1. The MCP client discovers available Juno tools via the MCP protocol
 2. When a tool is called, the server authenticates with your Uptycs API key (JWT) and calls the Juno API
 3. Juno processes the request and returns findings, summaries, and recommendations back through the server
-
-```mermaid
-sequenceDiagram
-    participant Client as MCP Client
-    participant Server as juno-mcp-server
-    participant Juno as Uptycs Juno API
-
-    Note over Client,Server: Connection setup
-    Client->>Server: initialize
-    Server-->>Client: available tools
-
-    Note over Client,Juno: Investigation
-    Client->>Server: create_investigation("privilege escalation attempts")
-    activate Server
-    Note over Server: Generate JWT from API key
-    Server->>Juno: POST /investigations
-    activate Juno
-    Juno-->>Server: investigation + run ID
-    deactivate Juno
-    Server-->>Client: investigation created
-    deactivate Server
-
-    Client->>Server: get_run(investigation_id, run_id)
-    activate Server
-    Server->>Juno: GET /runs/{id}
-    activate Juno
-    Juno-->>Server: run with findings, tasks, summary
-    deactivate Juno
-    Server-->>Client: full run results
-    deactivate Server
-
-    Note over Client,Juno: Follow-up
-    Client->>Server: create_follow_up("What accounts were involved?")
-    activate Server
-    Server->>Juno: POST /runs (parentRunId)
-    activate Juno
-    Juno-->>Server: new run
-    deactivate Juno
-    Server-->>Client: follow-up run created
-    deactivate Server
-```
-
-## What you can do
-
-- **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
-- **Follow up** — "What user accounts were involved in the lateral movement?"
-- **Manage investigations** — List, create, and delete investigations
-- **Share** — Publish investigation runs for others to see
 
 ## Prerequisites
 
