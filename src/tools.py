@@ -94,6 +94,7 @@ async def _get_investigation(client: JunoClient, args: dict[str, Any]) -> str:
 async def _create_investigation(client: JunoClient, args: dict[str, Any]) -> str:
     data = await client.create_investigation(
         question=args["question"],
+        agent=args.get("persona", "")
     )
     _inject_url(client, data)
     return json.dumps(data, indent=2, default=str)
@@ -224,6 +225,13 @@ _ALL_TOOLS: list[ToolDef] = [
                         "'Are there privilege escalation attempts in the last 24 hours?'"
                     ),
                 },
+                "persona": {
+                    "type": "string",
+                    "description": (
+                        "Optional agent persona to adopt for this investigation. Auto-detected if not provided."
+                        "Choices: 'security_analyst', 'incident_response', 'ciso'."
+                    ),
+                }
             },
             "required": ["question"],
         },

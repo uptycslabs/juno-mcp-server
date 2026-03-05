@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import ssl
 from typing import Any
 
 import httpx
+import truststore
 
 from .auth import ApiKey, auth_headers
 
@@ -64,7 +66,9 @@ class JunoClient:
             f"https://{api_key.domain}{api_key.domain_suffix}"
             f"/ui/juno/investigations"
         )
+        ssl_ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         self._http = httpx.AsyncClient(
+            verify=ssl_ctx,
             timeout=httpx.Timeout(60.0, connect=10.0),
             event_hooks={
                 "request": [
@@ -147,11 +151,27 @@ class JunoClient:
     async def create_investigation(
         self,
         question: str,
+        agent: str = "",
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"question": question}
+        if agent:
+            body["agent"] = agent
 
         resp = await self._http.post(
             f"{self._base}/investigations",
+            json=body,
+        )
+        _raise_for_status(resp)
+        return _parse_json(resp)
+
+    async def change_persona(
+        self,
+        investigation_id: str,
+        agent: str,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"agent": agent}
+        resp = await self._http.put(
+            f"{self._base}/investigations/{investigation_id}/persona",
             json=body,
         )
         _raise_for_status(resp)
