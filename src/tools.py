@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Awaitable
@@ -13,6 +15,11 @@ from mcp.types import TextContent, Tool
 from .client import JunoClient
 
 logger = logging.getLogger("juno_mcp.tools")
+
+# Blocking mode: wait for runs to complete instead of returning immediately
+_BLOCKING_MODE = os.getenv("JUNO_MCP_BLOCKING", "false").lower() == "true"
+_POLL_INTERVAL = 2  # seconds between polls
+
 
 @dataclass(frozen=True)
 class ToolDef:
@@ -71,6 +78,16 @@ def _strip_keys(obj: Any) -> Any:
     return obj
 
 
+async def _wait_for_run(client: JunoClient, investigation_id: str, run_id: str) -> dict:
+    """Poll get_run until status is 'completed' or 'failed'."""
+    while True:
+        data = await client.get_run(investigation_id, run_id)
+        status = data.get("status")
+        if status in ("completed", "failed"):
+            return data
+        await asyncio.sleep(_POLL_INTERVAL)
+
+
 async def _list_investigations(client: JunoClient, args: dict[str, Any]) -> str:
     data = await client.list_investigations(
         search=args.get("search"),
@@ -97,6 +114,17 @@ async def _create_investigation(client: JunoClient, args: dict[str, Any]) -> str
         agent=args.get("persona", "")
     )
     _inject_url(client, data)
+
+    # If blocking mode enabled, wait for run to complete
+    if _BLOCKING_MODE:
+        runs = data.get("runs", [])
+        if runs:
+            run_id = runs[0].get("id")
+            inv_id = data.get("id")
+            if run_id and inv_id:
+                run_data = await _wait_for_run(client, inv_id, run_id)
+                data["runs"] = [run_data]
+
     return json.dumps(data, indent=2, default=str)
 
 
@@ -121,6 +149,15 @@ async def _create_follow_up(client: JunoClient, args: dict[str, Any]) -> str:
         question=args["question"],
     )
     _inject_url(client, data, "investigationId")
+
+    # If blocking mode enabled, wait for run to complete
+    if _BLOCKING_MODE:
+        run_id = data.get("id")
+        inv_id = args["investigation_id"]
+        if run_id:
+            data = await _wait_for_run(client, inv_id, run_id)
+            _inject_url(client, data, "investigationId")
+
     return json.dumps(data, indent=2, default=str)
 
 
@@ -212,8 +249,13 @@ _ALL_TOOLS: list[ToolDef] = [
         name="create_investigation",
         description=(
             "Start a new Juno AI investigation. "
-            "Returns the investigation with its first run (initially pending/running). "
-            "Poll with get_run until completed or failed."
+            + (
+                "This call blocks until the investigation completes (may take several minutes). "
+                "Returns the investigation with completed run results."
+                if _BLOCKING_MODE
+                else "Returns the investigation with its first run (initially pending/running). "
+                "Poll with get_run until completed or failed."
+            )
         ),
         schema={
             "type": "object",
@@ -270,7 +312,12 @@ _ALL_TOOLS: list[ToolDef] = [
             "Ask a follow-up question on a completed run. Inherits full parent context for deeper analysis. "
             "Parent run MUST be completed or failed first — only one run per investigation can execute at a time. "
             "Calling while a run is active will fail. "
-            "Returns a new run — poll with get_run until completed."
+            + (
+                "This call blocks until the follow-up completes (may take several minutes). "
+                "Returns the completed run results."
+                if _BLOCKING_MODE
+                else "Returns a new run — poll with get_run until completed."
+            )
         ),
         schema={
             "type": "object",
