@@ -115,6 +115,30 @@ Restart your MCP client. You should see Juno tools available.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPTYCS_API_KEY_FILE` | Yes | — | Path to your Uptycs API key JSON file |
+| `JUNO_MCP_BLOCKING` | No | `false` | Set to `true` to enable blocking mode (see below) |
+
+## Blocking mode
+
+By default, `create_investigation` and `create_follow_up` return immediately with a pending run, and the client must poll `get_run` until the run completes.
+
+With **blocking mode** enabled, these calls wait internally until the investigation completes and return the full results directly — no polling required.
+
+```json
+{
+  "mcpServers": {
+    "juno": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/juno-mcp-server", "run", "juno-mcp"],
+      "env": {
+        "UPTYCS_API_KEY_FILE": "/path/to/apikey.json",
+        "JUNO_MCP_BLOCKING": "true"
+      }
+    }
+  }
+}
+```
+
+> **Note:** Investigations can take several minutes to complete. In blocking mode, the tool call will wait until done.
 
 ## License
 
