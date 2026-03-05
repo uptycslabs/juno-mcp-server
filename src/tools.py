@@ -228,7 +228,7 @@ _ALL_TOOLS: list[ToolDef] = [
                 "persona": {
                     "type": "string",
                     "description": (
-                        "Optional agent persona to adopt for this investigation. Auto-detected if not provided."
+                        "Optional agent persona to adopt for this investigation. Auto-detected if not provided. "
                         "Choices: 'security_analyst', 'incident_response', 'ciso'."
                     ),
                 }
