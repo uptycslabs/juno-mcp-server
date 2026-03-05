@@ -164,19 +164,6 @@ class JunoClient:
         _raise_for_status(resp)
         return _parse_json(resp)
 
-    async def change_persona(
-        self,
-        investigation_id: str,
-        agent: str,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"agent": agent}
-        resp = await self._http.put(
-            f"{self._base}/investigations/{investigation_id}/persona",
-            json=body,
-        )
-        _raise_for_status(resp)
-        return _parse_json(resp)
-
     async def delete_investigation(
         self, investigation_id: str,
     ) -> None:
