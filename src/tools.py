@@ -18,7 +18,7 @@ logger = logging.getLogger("juno_mcp.tools")
 
 # Blocking mode: wait for runs to complete instead of returning immediately
 _BLOCKING_MODE = os.getenv("JUNO_MCP_BLOCKING", "false").lower() == "true"
-_POLL_INTERVAL = 2  # seconds between polls
+_POLL_INTERVAL = 30  # seconds between polls
 
 
 @dataclass(frozen=True)
