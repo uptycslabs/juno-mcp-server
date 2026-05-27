@@ -11,7 +11,9 @@ Connect Juno to any MCP-compatible client to investigate threats, analyze findin
 
 - **Investigate threats** — "Are there any privilege escalation attempts in the last 24 hours?"
 - **Follow up** — "What user accounts were involved in the lateral movement?"
+- **Scope investigations** — Target specific connectors, time ranges, and personas
 - **Manage investigations** — List, create, and delete investigations
+- **Browse connectors** — See which external integrations (GitHub, Splunk, AWS, etc.) are configured
 - **Share** — Publish investigation runs for others to see
 
 ## How it works
@@ -20,7 +22,12 @@ Connect Juno to any MCP-compatible client to investigate threats, analyze findin
 flowchart LR
     Client["MCP Client"]
     Server["juno-mcp-server"]
-    Juno["Uptycs Juno"]
+
+    subgraph UptycsJuno["Uptycs Juno"]
+        Juno["AI Assistant"]
+        Connectors["Connectors<br/>(GitHub, Splunk, …)"]
+        Juno -. "calls during investigation" .-> Connectors
+    end
 
     Client -- "tool calls" --> Server
     Server -- "responses" --> Client
@@ -30,6 +37,7 @@ flowchart LR
     style Client fill:#4a90d9,stroke:#2c5f8a,color:#fff
     style Server fill:#2ecc71,stroke:#1a9c54,color:#fff
     style Juno fill:#e74c3c,stroke:#c0392b,color:#fff
+    style Connectors fill:#e74c3c,stroke:#c0392b,color:#fff
 ```
 
 1. The MCP client discovers available Juno tools via the MCP protocol
@@ -109,6 +117,13 @@ Restart your MCP client. You should see Juno tools available.
 | `publish_run` | Share a run with other users |
 | `unpublish_run` | Unshare a run |
 | `list_published_runs` | List shared runs |
+
+### Connectors
+
+| Tool | Description |
+|------|-------------|
+| `list_connectors` | List configured external integrations (GitHub, Splunk, AWS, etc.) |
+| `get_connector` | Get details of a specific connector |
 
 ## Environment variables
 

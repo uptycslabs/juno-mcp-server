@@ -151,11 +151,20 @@ class JunoClient:
     async def create_investigation(
         self,
         question: str,
-        agent: str = "",
+        persona: str = "",
+        mcp_connectors: list[str] | None = None,
+        time_range_start: str | None = None,
+        time_range_end: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"question": question}
-        if agent:
-            body["agent"] = agent
+        if persona:
+            body["persona"] = persona
+        if mcp_connectors:
+            body["mcpConnectors"] = mcp_connectors
+        if time_range_start:
+            body["timeRangeStart"] = time_range_start
+        if time_range_end:
+            body["timeRangeEnd"] = time_range_end
 
         resp = await self._http.post(
             f"{self._base}/investigations",
@@ -195,11 +204,14 @@ class JunoClient:
         investigation_id: str,
         parent_run_id: str,
         question: str,
+        persona: str = "",
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "question": question,
             "parentRunId": parent_run_id,
         }
+        if persona:
+            body["persona"] = persona
         resp = await self._http.post(
             f"{self._base}/investigations"
             f"/{investigation_id}/runs",
@@ -250,3 +262,33 @@ class JunoClient:
             "nextCursor": _extract_cursor(data),
         }
 
+    # ------------------------------------------------------------------
+    # Connectors
+    # ------------------------------------------------------------------
+
+    async def list_connectors(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        resp = await self._http.get(
+            f"{self._base}/connectors",
+            params=params,
+        )
+        _raise_for_status(resp)
+        data = _parse_json(resp)
+        return {
+            "items": data.get("items", []),
+            "nextCursor": _extract_cursor(data),
+        }
+
+    async def get_connector(self, connector_id: str) -> dict[str, Any]:
+        resp = await self._http.get(
+            f"{self._base}/connectors/{connector_id}",
+        )
+        _raise_for_status(resp)
+        return _parse_json(resp)
