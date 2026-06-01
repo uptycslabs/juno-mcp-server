@@ -111,7 +111,10 @@ async def _get_investigation(client: JunoClient, args: dict[str, Any]) -> str:
 async def _create_investigation(client: JunoClient, args: dict[str, Any]) -> str:
     data = await client.create_investigation(
         question=args["question"],
-        agent=args.get("persona", "")
+        persona=args.get("persona", ""),
+        mcp_connectors=args.get("mcpConnectors") or None,
+        time_range_start=args.get("timeRangeStart"),
+        time_range_end=args.get("timeRangeEnd"),
     )
     _inject_url(client, data)
 
@@ -147,6 +150,7 @@ async def _create_follow_up(client: JunoClient, args: dict[str, Any]) -> str:
         investigation_id=args["investigation_id"],
         parent_run_id=args["parent_run_id"],
         question=args["question"],
+        persona=args.get("persona", ""),
     )
     _inject_url(client, data, "investigationId")
 
@@ -187,6 +191,23 @@ async def _list_published_runs(client: JunoClient, args: dict[str, Any]) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
+async def _list_connectors(
+    client: JunoClient, args: dict[str, Any],
+) -> str:
+    data = await client.list_connectors(
+        limit=args.get("limit", 20),
+        cursor=args.get("cursor"),
+    )
+    return json.dumps(_strip_keys(data), indent=2, default=str)
+
+
+async def _get_connector(
+    client: JunoClient, args: dict[str, Any],
+) -> str:
+    _validate_uuid(args, "connector_id")
+    data = await client.get_connector(args["connector_id"])
+    return json.dumps(_strip_keys(data), indent=2, default=str)
+
 
 _INVESTIGATION_ID_PROP = {
     "investigation_id": {
@@ -209,10 +230,19 @@ _PAGINATION_PROPS = {
     },
     "cursor": {
         "type": "string",
-        "description": "Pagination cursor from a previous response's nextCursor field",
+        "description": (
+            "Pagination cursor from a previous response's "
+            "nextCursor field"
+        ),
     },
 }
 
+_CONNECTOR_ID_PROP = {
+    "connector_id": {
+        "type": "string",
+        "description": "Connector UUID — plain format, no prefix",
+    }
+}
 
 _ALL_TOOLS: list[ToolDef] = [
     ToolDef(
@@ -273,7 +303,30 @@ _ALL_TOOLS: list[ToolDef] = [
                         "Optional agent persona to adopt for this investigation. Auto-detected if not provided. "
                         "Choices: 'security_analyst', 'incident_response', 'ciso'."
                     ),
-                }
+                },
+                "mcpConnectors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "UUIDs of connectors to use for this "
+                        "investigation. Use list_connectors to "
+                        "get connector IDs."
+                    ),
+                },
+                "timeRangeStart": {
+                    "type": "string",
+                    "description": (
+                        "Start of investigation time range. "
+                        "RFC3339 or YYYY-MM-DD."
+                    ),
+                },
+                "timeRangeEnd": {
+                    "type": "string",
+                    "description": (
+                        "End of investigation time range. "
+                        "RFC3339 or YYYY-MM-DD."
+                    ),
+                },
             },
             "required": ["question"],
         },
@@ -329,7 +382,17 @@ _ALL_TOOLS: list[ToolDef] = [
                 },
                 "question": {
                     "type": "string",
-                    "description": "Follow-up question building on the parent run's context",
+                    "description": (
+                        "Follow-up question building on the "
+                        "parent run's context"
+                    ),
+                },
+                "persona": {
+                    "type": "string",
+                    "description": (
+                        "Optional persona override. Defaults to "
+                        "the parent run's persona."
+                    ),
                 },
             },
             "required": ["investigation_id", "parent_run_id", "question"],
@@ -372,6 +435,43 @@ _ALL_TOOLS: list[ToolDef] = [
             },
         },
         handler=_list_published_runs,
+    ),
+    # ------------------------------------------------------------------
+    # Connectors
+    # ------------------------------------------------------------------
+    ToolDef(
+        name="list_connectors",
+        description=(
+            "List configured connectors (integrations with external "
+            "services like GitHub, Splunk, AWS CloudWatch). "
+            "Returns id, name, flavor, enabled per connector. "
+            "Supports pagination via cursor."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Max results (1-50)",
+                },
+                "cursor": _PAGINATION_PROPS["cursor"],
+            },
+        },
+        handler=_list_connectors,
+    ),
+    ToolDef(
+        name="get_connector",
+        description=(
+            "Get details of a specific connector including its "
+            "configuration, enabled status, and flavor."
+        ),
+        schema={
+            "type": "object",
+            "properties": _CONNECTOR_ID_PROP,
+            "required": ["connector_id"],
+        },
+        handler=_get_connector,
     ),
 ]
 
