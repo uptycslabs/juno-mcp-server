@@ -13,6 +13,7 @@ Connect Juno to any MCP-compatible client to investigate threats, analyze findin
 - **Follow up** — "What user accounts were involved in the lateral movement?"
 - **Scope investigations** — Target specific connectors, time ranges, and personas
 - **Manage investigations** — List, create, and delete investigations
+- **Reuse playbooks** — Save an investigation brief once, then launch it on demand with per-run values
 - **Browse connectors** — See which external integrations (GitHub, Splunk, AWS, etc.) are configured
 - **Share** — Publish investigation runs for others to see
 
@@ -117,6 +118,17 @@ Restart your MCP client. You should see Juno tools available.
 | `publish_run` | Share a run with other users |
 | `unpublish_run` | Unshare a run |
 | `list_published_runs` | List shared runs |
+
+### Playbooks
+
+| Tool | Description |
+|------|-------------|
+| `list_playbooks` | List reusable investigation templates |
+| `get_playbook` | Get a playbook's brief and input parameters |
+| `create_playbook` | Save a new investigation template |
+| `update_playbook` | Partially update a playbook |
+| `delete_playbook` | Delete a playbook |
+| `launch_playbook` | Start a new investigation from a playbook |
 
 ### Connectors
 

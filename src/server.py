@@ -42,7 +42,8 @@ affected assets, recommendations, and executive summaries.
 Telemetry covers: alerts, detections, risk factors, cloud resources (AWS, GCP, Azure),
 endpoint events (processes, network), Kubernetes, and compliance findings.
 
-Agent types (auto-selected or user-specified): `security_analyst` (default), `incident_response`, `ciso`.
+Agent types (auto-selected or user-specified): `security_analyst` (default), `incident_response`,
+`ciso`, `deep_research`.
 
 ## ID Format
 All IDs are plain UUIDs. Never add prefixes like "inv_" or "run_".
@@ -54,7 +55,7 @@ All IDs are plain UUIDs. Never add prefixes like "inv_" or "run_".
 3. Prefer create_follow_up over create_investigation when deepening existing results.
 
 ## Polling for Results
-After create_investigation or create_follow_up:
+After create_investigation, create_follow_up, or launch_playbook:
 1. Extract investigation_id and run_id from the response.
 2. Poll with get_run. On pending/running: show partial data, wait ~10s (back off to ~30s after 3 polls).
 3. Keep polling until completed or failed. Show progress incrementally.
