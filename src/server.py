@@ -8,9 +8,15 @@ import logging.handlers
 import os
 from pathlib import Path
 
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+)
 
 from importlib.metadata import version as pkg_version
 
@@ -61,31 +67,51 @@ After create_investigation or create_follow_up:
 - Issue independent tool calls in parallel.
 """
 
-server = Server("juno", version=__version__, instructions=_INSTRUCTIONS)
-
 _client: JunoClient | None = None
 
 
-@server.list_tools()
-async def list_tools():
-    return get_all_tools()
+def _error(message: str) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=message)],
+        isError=True,
+    )
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict):
+async def list_tools(
+    ctx: ServerRequestContext,
+    params: PaginatedRequestParams | None,
+) -> ListToolsResult:
+    return ListToolsResult(tools=get_all_tools())
+
+
+async def call_tool(
+    ctx: ServerRequestContext,
+    params: CallToolRequestParams,
+) -> CallToolResult:
+    name = params.name
+
     if _client is None:
-        return [TextContent(type="text", text="Server not initialized.")]
+        return _error("Server not initialized.")
 
     logger.info("Tool %s called", name)
 
     try:
-        result = await dispatch(name, arguments or {}, _client)
+        content = await dispatch(name, params.arguments or {}, _client)
     except KeyError:
-        return [TextContent(type="text", text=f"Unknown tool: {name}")]
+        return _error(f"Unknown tool: {name}")
     except Exception as exc:
         logger.exception("Tool %s failed", name)
-        return [TextContent(type="text", text=f"Error: {exc}")]
-    return result
+        return _error(f"Error: {exc}")
+    return CallToolResult(content=content)
+
+
+server = Server(
+    "juno",
+    version=__version__,
+    instructions=_INSTRUCTIONS,
+    on_list_tools=list_tools,
+    on_call_tool=call_tool,
+)
 
 
 def _log_dir() -> Path:
