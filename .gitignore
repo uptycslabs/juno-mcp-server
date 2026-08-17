@@ -16,7 +16,6 @@ env/
 .python-version
 
 # Package manager
-uv.lock
 
 # Secrets & credentials
 *.pem
