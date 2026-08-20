@@ -292,3 +292,74 @@ class JunoClient:
         )
         _raise_for_status(resp)
         return _parse_json(resp)
+
+    # ------------------------------------------------------------------
+    # Playbooks
+    # ------------------------------------------------------------------
+    #
+    # Create/update/launch take a pre-built ``body`` rather than explicit
+    # keyword arguments: the write surface is wide (11 fields) and update
+    # distinguishes an omitted field from an explicit ``null``, which a
+    # defaulted keyword argument cannot express.
+
+    async def list_playbooks(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        resp = await self._http.get(
+            f"{self._base}/playbooks",
+            params=params,
+        )
+        _raise_for_status(resp)
+        data = _parse_json(resp)
+        return {
+            "items": data.get("items", []),
+            "nextCursor": _extract_cursor(data),
+        }
+
+    def _playbook_url(self, playbook_id: str) -> str:
+        return f"{self._base}/playbooks/{playbook_id}"
+
+    async def get_playbook(self, playbook_id: str) -> dict[str, Any]:
+        resp = await self._http.get(self._playbook_url(playbook_id))
+        _raise_for_status(resp)
+        return _parse_json(resp)
+
+    async def create_playbook(
+        self, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        resp = await self._http.post(
+            f"{self._base}/playbooks",
+            json=body,
+        )
+        _raise_for_status(resp)
+        return _parse_json(resp)
+
+    async def update_playbook(
+        self, playbook_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        resp = await self._http.put(
+            self._playbook_url(playbook_id),
+            json=body,
+        )
+        _raise_for_status(resp)
+        return _parse_json(resp)
+
+    async def delete_playbook(self, playbook_id: str) -> None:
+        resp = await self._http.delete(self._playbook_url(playbook_id))
+        _raise_for_status(resp)
+
+    async def launch_playbook(
+        self, playbook_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        resp = await self._http.post(
+            f"{self._playbook_url(playbook_id)}/launch",
+            json=body,
+        )
+        _raise_for_status(resp)
+        return _parse_json(resp)

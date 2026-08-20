@@ -209,6 +209,95 @@ async def _get_connector(
     return json.dumps(_strip_keys(data), indent=2, default=str)
 
 
+# Optional launch fields, in request-body spelling. A key absent from args stays
+# absent from the body so the API applies its own default.
+_PLAYBOOK_LAUNCH_FIELDS = (
+    "inputParameters",
+    "inputContext",
+    "calibrationId",
+    "projectId",
+    "timeRangeStart",
+    "timeRangeEnd",
+    "securityZoneIds",
+    "assetGroupIds",
+)
+
+
+def _body_from(args: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    """Project *args* onto a request body, preserving omitted vs explicit null.
+
+    Membership rather than ``.get()`` is what makes update a partial update: a
+    key the caller omitted stays out of the body, while an explicit ``null``
+    is forwarded as the API's signal to clear that field.
+    """
+    return {k: args[k] for k in fields if k in args}
+
+
+# Playbooks are returned unstripped: postAction.parameters is an author-controlled
+# free-form map, so a key named e.g. "findings" is real data that _strip_keys
+# would silently drop.
+async def _list_playbooks(client: JunoClient, args: dict[str, Any]) -> str:
+    data = await client.list_playbooks(
+        limit=args.get("limit", 20),
+        cursor=args.get("cursor"),
+    )
+    return json.dumps(data, indent=2, default=str)
+
+
+async def _get_playbook(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "playbook_id")
+    data = await client.get_playbook(args["playbook_id"])
+    return json.dumps(data, indent=2, default=str)
+
+
+
+async def _create_playbook(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "calibrationId")
+    data = await client.create_playbook(
+        _body_from(args, _PLAYBOOK_WRITE_FIELDS),
+    )
+    return json.dumps(data, indent=2, default=str)
+
+
+async def _update_playbook(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "playbook_id", "calibrationId")
+    body = _body_from(args, _PLAYBOOK_WRITE_FIELDS)
+    if not body:
+        raise ValueError(
+            "update_playbook needs at least one field to change — "
+            f"pass one of: {', '.join(_PLAYBOOK_WRITE_FIELDS)}"
+        )
+    data = await client.update_playbook(args["playbook_id"], body)
+    return json.dumps(data, indent=2, default=str)
+
+
+async def _delete_playbook(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "playbook_id")
+    await client.delete_playbook(args["playbook_id"])
+    return f"Playbook {args['playbook_id']} deleted."
+
+
+async def _launch_playbook(client: JunoClient, args: dict[str, Any]) -> str:
+    _validate_uuid(args, "playbook_id", "calibrationId", "projectId")
+    data = await client.launch_playbook(
+        args["playbook_id"],
+        _body_from(args, _PLAYBOOK_LAUNCH_FIELDS),
+    )
+
+    # Launch returns {investigationId, runId} — not the "id" _inject_url keys off.
+    inv_id = data.get("investigationId")
+    run_id = data.get("runId")
+    if inv_id and run_id:
+        data["uptycsConsoleUrl"] = client.console_url(str(inv_id), str(run_id))
+
+        if _BLOCKING_MODE:
+            data["run"] = await _wait_for_run(
+                client, str(inv_id), str(run_id),
+            )
+
+    return json.dumps(data, indent=2, default=str)
+
+
 _INVESTIGATION_ID_PROP = {
     "investigation_id": {
         "type": "string",
@@ -243,6 +332,148 @@ _CONNECTOR_ID_PROP = {
         "description": "Connector UUID — plain format, no prefix",
     }
 }
+
+_PLAYBOOK_ID_PROP = {
+    "playbook_id": {
+        "type": "string",
+        "description": "Playbook UUID — plain format, no prefix",
+    }
+}
+
+_INPUT_PARAMETER_DEF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": 'Referenced as {{param "name"}} in questionTemplate',
+        },
+        "label": {"type": "string", "description": "Field label shown when launching"},
+        "description": {"type": "string", "description": "Help text"},
+        "type": {"type": "string", "enum": ["string", "number", "bool", "enum"]},
+        "default": {
+            "description": (
+                "Declaring a default makes the parameter optional at launch; "
+                "without one it is required. Must match the declared type."
+            ),
+        },
+        "enum": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Allowed values — required when type is 'enum'",
+        },
+    },
+    "required": ["name", "type"],
+}
+
+_POST_ACTION_SCHEMA = {
+    "type": "object",
+    "description": (
+        "Optional MCP tool call fired when a launched investigation completes — "
+        "it performs a real side effect (opens a ticket, runs a scan), so only "
+        "set it when the user asks for one. All three fields required together."
+    ),
+    "properties": {
+        "connectorId": {
+            "type": "string",
+            "description": "Connector UUID — use list_connectors",
+        },
+        "toolName": {"type": "string", "description": "Tool to invoke on that connector"},
+        "parameters": {
+            "type": "object",
+            "description": (
+                "Tool arguments. Each value is a Go text/template string that "
+                'may reference {{param "name"}} and the completed run '
+                "(.Investigation, .Run.findings, .Run.summarySections)."
+            ),
+        },
+    },
+    "required": ["connectorId", "toolName", "parameters"],
+}
+
+_PLAYBOOK_PERSONA_PROP = {
+    "type": "string",
+    "enum": ["security_analyst", "incident_response", "ciso", "deep_research"],
+    "description": "Persona for launched investigations. Default security_analyst.",
+}
+
+_PLAYBOOK_VISIBILITY_DESC = (
+    "Applied to every investigation this playbook launches: 'private' "
+    "(default), 'published_ro' (org can read), 'published_rw' (org can also "
+    "take owner actions)."
+)
+
+_PLAYBOOK_CALIBRATION_DESC = (
+    "Default calibration UUID for launched investigations, overridable at launch"
+)
+
+
+def _nullable(prop: dict[str, Any]) -> dict[str, Any]:
+    """Widen a schema property to also accept null — update's 'clear' signal."""
+    out = dict(prop)
+    t = out["type"]
+    out["type"] = [t, "null"] if isinstance(t, str) else [*t, "null"]
+    if "enum" in out:
+        out["enum"] = [*out["enum"], None]
+    return out
+
+
+# The playbook write surface. create takes these as-is; update takes the same
+# fields widened to accept null, which is how it clears one.
+_PLAYBOOK_FIELDS: dict[str, Any] = {
+    "name": {"type": "string", "description": "Unique playbook name"},
+    "questionTemplate": {
+        "type": "string",
+        "description": (
+            "The investigation brief — an objective plus a plan of what to "
+            'investigate, not how to query it. May contain {{param "name"}} '
+            "placeholders filled at launch."
+        ),
+    },
+    "description": {
+        "type": "string",
+        "description": "What this playbook does / when to use it",
+    },
+    "persona": _PLAYBOOK_PERSONA_PROP,
+    "modelFamily": {
+        "type": "string",
+        "enum": ["claude", "juno"],
+        "description": "Omit to inherit the customer default",
+    },
+    "modelTier": {
+        "type": "string",
+        "enum": ["fast", "balanced", "advanced"],
+        "description": "Omit to route normally",
+    },
+    "mcpConnectors": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Connector UUIDs — use list_connectors",
+    },
+    "inputParameters": {
+        "type": "array",
+        "items": _INPUT_PARAMETER_DEF_SCHEMA,
+        "description": (
+            "Definitions of the launch-time variables (on launch_playbook this "
+            "same key is a name-to-value map)"
+        ),
+    },
+    "visibility": {
+        "type": "string",
+        "enum": ["private", "published_ro", "published_rw"],
+        "description": _PLAYBOOK_VISIBILITY_DESC,
+    },
+    "postAction": _POST_ACTION_SCHEMA,
+    "calibrationId": {
+        "type": "string",
+        "description": _PLAYBOOK_CALIBRATION_DESC,
+    },
+}
+
+# Required on create and not clearable on update — null or "" is rejected.
+_PLAYBOOK_UNCLEARABLE = ("name", "questionTemplate")
+
+_PLAYBOOK_WRITE_FIELDS = tuple(_PLAYBOOK_FIELDS)
+
 
 _ALL_TOOLS: list[ToolDef] = [
     ToolDef(
@@ -472,6 +703,166 @@ _ALL_TOOLS: list[ToolDef] = [
             "required": ["connector_id"],
         },
         handler=_get_connector,
+    ),
+    # ------------------------------------------------------------------
+    # Playbooks
+    # ------------------------------------------------------------------
+    ToolDef(
+        name="list_playbooks",
+        description=(
+            "List playbooks — reusable, parameterized investigation templates. "
+            "Returns id, name, description, questionTemplate, inputParameters, "
+            "persona, visibility, postAction per playbook. "
+            "Supports pagination via cursor."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Max results (1-50)",
+                },
+                "cursor": _PAGINATION_PROPS["cursor"],
+            },
+        },
+        handler=_list_playbooks,
+    ),
+    ToolDef(
+        name="get_playbook",
+        description=(
+            "Get a playbook's full definition: questionTemplate, declared "
+            "inputParameters (read these to know what launch_playbook needs), "
+            "persona, mcpConnectors, visibility, and postAction."
+        ),
+        schema={
+            "type": "object",
+            "properties": _PLAYBOOK_ID_PROP,
+            "required": ["playbook_id"],
+        },
+        handler=_get_playbook,
+    ),
+    ToolDef(
+        name="create_playbook",
+        description=(
+            "Create a playbook — an investigation brief saved once and launched "
+            'many times with per-launch values. Every {{param "x"}} in '
+            "questionTemplate and in postAction parameters must name a declared "
+            "inputParameters entry. Name must be unique in the org."
+        ),
+        schema={
+            "type": "object",
+            "properties": _PLAYBOOK_FIELDS,
+            "required": ["name", "questionTemplate"],
+        },
+        handler=_create_playbook,
+    ),
+    ToolDef(
+        name="update_playbook",
+        description=(
+            "Partially update a playbook: omit a field to leave it unchanged, or "
+            "pass null to clear it. name and questionTemplate cannot be cleared, "
+            "and postAction clears only via null ({} is rejected as incomplete). "
+            'Every {{param "x"}} must still name a declared inputParameters '
+            "entry, so send questionTemplate and inputParameters together when "
+            "changing either. Replaces list fields wholesale — no merging."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                **_PLAYBOOK_ID_PROP,
+                **{
+                    k: v if k in _PLAYBOOK_UNCLEARABLE else _nullable(v)
+                    for k, v in _PLAYBOOK_FIELDS.items()
+                },
+            },
+            "required": ["playbook_id"],
+        },
+        handler=_update_playbook,
+    ),
+    ToolDef(
+        name="delete_playbook",
+        description=(
+            "Permanently delete a playbook. Cannot be undone, and a playbook is "
+            "shared org-wide — only when the user explicitly asks. Investigations "
+            "already launched from it are not affected."
+        ),
+        schema={
+            "type": "object",
+            "properties": _PLAYBOOK_ID_PROP,
+            "required": ["playbook_id"],
+        },
+        handler=_delete_playbook,
+    ),
+    ToolDef(
+        name="launch_playbook",
+        description=(
+            "Launch a playbook — starts a NEW investigation from the template. "
+            "Call get_playbook first: every declared input parameter without a "
+            "default must be supplied here. Question, persona and connectors come "
+            "from the playbook and cannot be overridden. "
+            + (
+                "Blocks until the investigation completes (may take several "
+                "minutes); returns the completed run in 'run'."
+                if _BLOCKING_MODE
+                else "Returns investigationId and runId — poll with get_run. A "
+                "completed run with postActionPending true means the playbook's "
+                "follow-up action has not finished yet."
+            )
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                **_PLAYBOOK_ID_PROP,
+                "inputParameters": {
+                    "type": "object",
+                    "description": (
+                        "Values for the playbook's declared parameters, keyed by "
+                        'name (e.g. {"excluded_regions": "ap-south-1"}). Not the '
+                        "array of definitions used by create_playbook."
+                    ),
+                },
+                "inputContext": {
+                    "type": "object",
+                    "description": (
+                        "Free-form launch context, e.g. the triggering alert "
+                        'payload. Not a template surface — {{param "..."}} sees '
+                        "only inputParameters. Capped at 1 MB."
+                    ),
+                },
+                "calibrationId": {
+                    "type": "string",
+                    "description": "Overrides the playbook's default calibration",
+                },
+                "projectId": {
+                    "type": "string",
+                    "description": "Project UUID to file the investigation under",
+                },
+                "timeRangeStart": {
+                    "type": "string",
+                    "description": "RFC3339 or YYYY-MM-DD",
+                },
+                "timeRangeEnd": {
+                    "type": "string",
+                    "description": "RFC3339 or YYYY-MM-DD",
+                },
+                "securityZoneIds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Security zone UUIDs to scope the investigation",
+                },
+                "assetGroupIds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Asset group UUIDs to scope the investigation "
+                        "(alternative to security zones)"
+                    ),
+                },
+            },
+            "required": ["playbook_id"],
+        },
+        handler=_launch_playbook,
     ),
 ]
 
